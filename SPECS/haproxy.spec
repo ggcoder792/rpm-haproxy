@@ -2,7 +2,7 @@
 # by Benoit Dolez <bdolez at zenetys.com>
 
 %define major           3.4
-%define minor           3
+%define minor           2
 
 %define haproxy_user    haproxy
 %define haproxy_group   %{haproxy_user}
@@ -11,14 +11,23 @@
 %define haproxy_datadir %{_datadir}/haproxy
 %define builddir        %{_builddir}/haproxy-%{version}
 
+# lua-5.3 is bundled for el7 only (el7 lua-devel is 5.1, haproxy 3.4 needs >=5.3)
+%define liblua          lua-5.3.6
+
+# el7 (rpm 4.11) lacks %%{build_cflags}/%%{build_ldflags}; provide compatible defaults
+%if 0%{?rhel} < 8
+%define build_cflags    %{optflags}
+%define build_ldflags   %{?__global_ldflags}
+%endif
+
 %{!?make_verbose: %define make_verbose 0}
 
 %global source_date_epoch_from_changelog 0
 %global _hardened_build 1
 
-Name:           haproxy34z
+Name:           haproxy
 Version:        %{major}.%{minor}
-Release:        1%{?dist}.zenetys
+Release:        1%{?dist}
 Summary:        HAProxy reverse proxy for high availability environments
 
 Group:          System Environment/Daemons
@@ -31,13 +40,30 @@ Source3:        haproxy.logrotate
 Source4:        haproxy.sysconfig
 Source5:        halog.1
 
+# Bundled lua-5.3 used only when building for rhel < 8
+Source100:      http://www.lua.org/ftp/%{liblua}.tar.gz
+Patch100:       lua-5.3-luaroot.patch
+
 BuildRequires:      gcc
-BuildRequires:      lua-devel
 BuildRequires:      make
+BuildRequires:      systemd-devel
+
+%if 0%{?rhel} >= 8
+BuildRequires:      lua-devel
 BuildRequires:      openssl-devel
 BuildRequires:      pcre2-devel
-BuildRequires:      systemd-devel
 BuildRequires:      systemd-rpm-macros
+%else
+# el7 fallbacks:
+#   - lua-devel on el7 is 5.1 -> bundle lua-5.3 (Source100/Patch100)
+#   - openssl on el7 is 1.0.2 (no TLS 1.3) -> openssl11 from EPEL
+#   - gcc on el7 is 4.8.5 (too old) -> devtoolset-11 from SCL
+#   - pcre2 not in el7 base -> pcre 8.x
+BuildRequires:      pcre-devel
+BuildRequires:      openssl11-devel
+BuildRequires:      devtoolset-11-gcc
+BuildRequires:      devtoolset-11-gcc-c++
+%endif
 
 Requires(pre):      shadow-utils
 
@@ -60,7 +86,53 @@ availability environments. Indeed, it can:
 %prep
 %setup -q -n haproxy-%{version}
 
+%if 0%{?rhel} < 8
+# el7: unpack bundled lua-5.3 into the haproxy tree and patch it
+%setup -T -D -a 100 -n haproxy-%{version}
+cd %{liblua}
+%patch100 -p1 -b .lua-path
+cd ..
+%endif
+
 %build
+%if 0%{?rhel} < 8
+# el7: activate modern gcc from SCL devtoolset-11 for the whole %%build
+. /opt/rh/devtoolset-11/enable
+
+# el7: build bundled lua-5.3 static library
+cd %{liblua}/src
+%{__make} liblua.a %{?_smp_mflags} SYSCFLAGS="-DLUA_USE_LINUX -fPIC" SYSLIBS="-Wl,-E"
+lua_inc="$PWD"
+lua_lib="$PWD"
+cd ../..
+[[ -e $lua_inc/lua.h ]] || exit 1
+[[ -e $lua_lib/liblua.a ]] || exit 1
+
+# el7: build haproxy against bundled lua, pcre1 and openssl11 (from EPEL)
+%{__make} \
+    %{?_smp_mflags} \
+    V=%{make_verbose} \
+    CPU=generic \
+    TARGET=linux-glibc \
+    USE_OPENSSL=1 \
+    USE_PCRE=1 \
+    USE_SLZ=1 \
+    USE_LUA=1 \
+    USE_PROMEX=1 \
+    USE_CRYPT_H=1 \
+    USE_LINUX_TPROXY=1 \
+    USE_GETADDRINFO=1 \
+    USE_SYSTEMD=1 \
+    USE_NS=1 \
+    USE_KTLS= \
+    SSL_INC=/usr/include/openssl11 \
+    SSL_LIB=/usr/lib64/openssl11 \
+    LUA_INC="$lua_inc" \
+    LUA_LIB="$lua_lib" \
+    LUA_LIB_NAME=lua \
+    CFLAGS="%{build_cflags}" \
+    LDFLAGS="%{build_ldflags}"
+%else
 %{__make} \
     %{?_smp_mflags} \
     V=%{make_verbose} \
@@ -78,6 +150,7 @@ availability environments. Indeed, it can:
     USE_NS=1 \
     CFLAGS="%{build_cflags}" \
     LDFLAGS="%{build_ldflags}"
+%endif
 
 %{__make} admin/halog/halog V=%{make_verbose} CFLAGS="%{build_cflags}" LDFLAGS="%{build_ldflags}"
 %{__make} -C admin/iprange V=%{make_verbose} OPTIMIZE="%{build_cflags}" LDFLAGS="%{build_ldflags}"
@@ -105,6 +178,14 @@ for textfile in $(find ./ -type f -name '*.txt'); do
     iconv --from-code ISO8859-1 --to-code UTF-8 --output $textfile $textfile.old
     %{__rm} -f $textfile.old
 done
+
+%if 0%{?rhel} < 8
+# el7: /usr/bin/python is 2.7 and brp-python-bytecompile chokes on Py3 syntax
+# in examples/mptcp-backend.py (f-strings). Match the old fork's behavior and
+# keep only .cfg example files under %{haproxy_datadir} on el7.
+find ./examples/ -type f ! -name '*.cfg' -delete
+find ./examples/ -type d -empty -delete
+%endif
 
 find ./examples/ -type f |while read -r; do
     %{__install} -p -D -m 0644 "$REPLY" "%{buildroot}%{haproxy_datadir}/${REPLY#./examples/}"

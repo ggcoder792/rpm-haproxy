@@ -283,7 +283,9 @@ RUN set -x && \
     ulimit -n 1024 && \
     sed -i -re 's,mirror\.centos\.org,vault.centos.org,; s,^(mirrorlist),#\1,; s,^#(baseurl),\1,' /etc/yum.repos.d/CentOS-*.repo && \
     yum update -y && \
-    yum install -y createrepo gcc make rpm-build && \
+    yum install -y createrepo gcc make rpm-build epel-release centos-release-scl && \
+    sed -i -re 's,mirror\.centos\.org,vault.centos.org,; s,^(mirrorlist),#\1,; s,^#[[:space:]]*(baseurl),\1,' /etc/yum.repos.d/CentOS-SCLo-*.repo && \
+    yum install -y devtoolset-11-gcc devtoolset-11-gcc-c++ openssl11-devel && \
     echo '* - nproc 2048' >> /etc/security/limits.d/90-nproc.conf && \
     sed -r -i -e 's/^(keepcache)=.*/\1=1/' /etc/yum.conf && \
     yum clean all
