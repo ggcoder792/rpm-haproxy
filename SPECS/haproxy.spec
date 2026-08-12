@@ -27,7 +27,7 @@
 
 Name:           haproxy
 Version:        %{major}.%{minor}
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        HAProxy reverse proxy for high availability environments
 
 Group:          System Environment/Daemons
@@ -168,6 +168,8 @@ cd ../..
 %{__install} -p -D -m 0644 %{SOURCE5} %{buildroot}%{_mandir}/man1/halog.1
 %{__install} -d -m 0755 %{buildroot}%{haproxy_homedir}
 %{__install} -d -m 0755 %{buildroot}%{haproxy_datadir}
+# owned dir so systemd unit's -f $CFGDIR (/etc/haproxy/conf.d) succeeds
+%{__install} -d -m 0755 %{buildroot}%{haproxy_confdir}/conf.d
 %{__install} -d -m 0755 %{buildroot}%{_bindir}
 %{__install} -p -m 0755 ./admin/halog/halog %{buildroot}%{_bindir}/halog
 %{__install} -p -m 0755 ./admin/iprange/iprange %{buildroot}%{_bindir}/iprange
@@ -215,6 +217,7 @@ exit 0
 %license LICENSE
 %dir %{haproxy_homedir}
 %dir %{haproxy_confdir}
+%dir %{haproxy_confdir}/conf.d
 %dir %{haproxy_datadir}
 %{haproxy_datadir}/*
 %config(noreplace) %{haproxy_confdir}/haproxy.cfg
